@@ -9,6 +9,9 @@ data_raw_23 <- read_delim("http://datos.salud.gob.ar/dataset/ceaa8e87-297e-4348-
 data_raw_24 <- read_delim("http://datos.salud.gob.ar/dataset/ceaa8e87-297e-4348-84b8-5c643e172500/resource/e57edd84-096d-4348-9137-2f5dae9c8f55/download/informacion-publica-dengue-zika-nacional-se-1-a-52-de-2024-2025-04-14.csv",
                           delim = ";", escape_double = FALSE, trim_ws = TRUE)
 
+
+unique(data_raw_24$grupo_etario)
+
 #Veo la cantidad de datos
 
 View(data_raw_23 %>%

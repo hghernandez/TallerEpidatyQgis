@@ -16,8 +16,8 @@ def <- readr::read_delim("http://datos.salud.gob.ar/dataset/27c588e8-43d0-411a-a
 
 unique(def$grupo_edad)
 
-defu_2023 <- def %>%
-       filter(anio == 2023) %>%
+defu_2022 <- def %>%
+       filter(anio == 2022) %>%
        mutate(
          CAUSA = case_when(
            cie10_causa_id >= 'I00' &
@@ -61,17 +61,17 @@ defu_2023 <- def %>%
 
 #Completo todas las combinaciones
 
-provincias <- defu_2023 %>%
+provincias <- defu_2022 %>%
   ungroup()%>%
   distinct(IDPROV,NOMPROV)
 
 
 
-all <- tidyr::crossing("IDPROV"=defu_2023$IDPROV,
-                       "EDAD"=defu_2023$EDAD,
-                       "SEXO"=defu_2023$SEXO,
-                       "CAUSA"=defu_2023$CAUSA) %>%
-  left_join(defu_2023 %>% ungroup() %>% select(-c("NOMPROV")),by= c("IDPROV","EDAD","SEXO","CAUSA")) %>%
+all <- tidyr::crossing("IDPROV"=defu_2022$IDPROV,
+                       "EDAD"=defu_2022$EDAD,
+                       "SEXO"=defu_2022$SEXO,
+                       "CAUSA"=defu_2022$CAUSA) %>%
+  left_join(defu_2022 %>% ungroup() %>% select(-c("NOMPROV")),by= c("IDPROV","EDAD","SEXO","CAUSA")) %>%
   left_join(provincias, by= "IDPROV")
 
 
@@ -82,47 +82,85 @@ poblacion <- read.table("src/poblacion1990-2021.txt")
 #Proceso los demás años
 
 library(readxl)
-base <- read_excel("src/c2_proyecciones_prov_2010_2040.xls", 
-                                             sheet = 2,range = "A61:X84")
-View(base)
-View(base %>%
-  reshape2::melt() %>%
+
+
+#Listo el nombre de las sheet para usar el nombre y codigo de prov
+sheets <- excel_sheets("src/c2_proyecciones_prov_2010_2040.xls")
+
+poblaciones <- list()
+
+for (i in 2:length(sheets)){
+
+  poblaciones[[i]] <- read_excel("src/c2_proyecciones_prov_2010_2040.xls", 
+                       sheet = i,range = "A61:X84")
+  
+  poblaciones[[i]] <- poblaciones[[i]] %>% 
+    reshape2::melt() %>%
     select(c(1,8)) %>%
     filter(!is.na(value))%>%
     mutate(sexo =  rep(c(rep('Ambos sexos',22),rep('Varones',22),rep('Mujeres',22)),6),
            anio= rep(2022:2027, each = 66),
            id_edad = rep(c(22, 1:21), length.out = 396),
-           gredad= paste0(id_edad,".",`...1`)))
+           gredad= paste0(id_edad,".",`...1`))
+  
+  
+  
+  poblaciones[[i]]['codigo'] <- as.numeric(substring(sheets[i],1,2))
+  poblaciones[[i]]['localidad'] <- paste0(substring(sheets[i],1,2),"-",substring(sheets[i],4,stringr::str_length(sheets[i])))
+  print(i)
+}
 
-22*3*6
+#Unifico las poblaciones
 
-unique(poblacion[poblacion$ano==2020,"gredad"])
-unique(all$EDAD)
+df_pobl_22_27 <- do.call("rbind",poblaciones)
 
-pob <- poblacion %>%
-       filter(ano == 2021) %>%
-       mutate(EDAD= case_when(as.numeric(substring(gredad,1,2)) <= 3 ~ "01.De a 0  a 14 anios",
-                              as.numeric(substring(gredad,1,2)) %in% c(4,5,6,7) ~ "02.De 15 a 34 anios",
-                              as.numeric(substring(gredad,1,2)) %in% c(8,9,10,11) ~ "03.De 35 a 54 anios",
-                              as.numeric(substring(gredad,1,2)) %in% c(12,13,14,15) ~ "04.De 55 a 74 anios",
-                              as.numeric(substring(gredad,1,2)) %in% c(16,17) ~ "05.De 75 anios y mas"))%>%
-       group_by(codigo,localidad,EDAD,sexo)%>%
-       summarise(poblacion=sum(poblacion))%>%
+# Armo estimaciones para usar en Vitales y epidemio
+
+pob_vitales <- df_pobl_22_27 %>%
+       mutate(EDAD_VITALES= case_when(id_edad <= 3 ~ "01.De a 0  a 14 anios",
+                              id_edad %in% c(4,5,6,7) ~ "02.De 15 a 34 anios",
+                              id_edad %in% c(8,9,10,11) ~ "03.De 35 a 54 anios",
+                              id_edad %in% c(12,13,14,15) ~ "04.De 55 a 74 anios",
+                              id_edad %in% c(16,17,18,19,20,21) ~ "05.De 75 anios y mas",
+                              id_edad == 22 ~ "06.TODAS LAS EDADES"),
+              EDAD_EPIDEMIO= case_when(id_edad %in% c(14,15,16,17,18,19,20,21) ~ "14.De 65 anios y mas",
+                                      id_edad == 22 ~ "15.TODAS LAS EDADES",
+                                      TRUE ~ gredad))%>%
+       group_by(anio,codigo,localidad,EDAD_VITALES,sexo)%>%
+       summarise(poblacion=sum(value))%>%
        filter(codigo != 1)%>%
-       bind_rows(group_by(.,sexo,codigo,localidad)%>%
-                   summarise(poblacion=sum(poblacion))%>%
-                   mutate(EDAD= "07.TODAS LAS EDADES"))%>%
        mutate(codigo= case_when(as.numeric(codigo) < 10 ~ paste0(0,codigo),
                                 TRUE ~ as.character(codigo)))
+#Pob epidemio
+pob_epidemio <- df_pobl_22_27 %>%
+  mutate(EDAD_VITALES= case_when(id_edad <= 3 ~ "01.De a 0  a 14 anios",
+                                 id_edad %in% c(4,5,6,7) ~ "02.De 15 a 34 anios",
+                                 id_edad %in% c(8,9,10,11) ~ "03.De 35 a 54 anios",
+                                 id_edad %in% c(12,13,14,15) ~ "04.De 55 a 74 anios",
+                                 id_edad %in% c(16,17,18,19,20,21) ~ "05.De 75 anios y mas",
+                                 id_edad == 22 ~ "06.TODAS LAS EDADES"),
+         EDAD_EPIDEMIO= case_when(id_edad %in% c(14,15,16,17,18,19,20,21) ~ "14.De 65 anios y mas",
+                                  id_edad == 22 ~ "15.TODAS LAS EDADES",
+                                  TRUE ~ gredad))%>%
+  group_by(anio,codigo,localidad,EDAD_EPIDEMIO,sexo)%>%
+  summarise(poblacion=sum(value))%>%
+  filter(codigo != 1)%>%
+  mutate(codigo= case_when(as.numeric(codigo) < 10 ~ paste0(0,codigo),
+                           TRUE ~ as.character(codigo)))
+
+
+#Guardo la poblacion de epidemiologia
+
+write.csv2(pob_epidemio,"src/pob_epidemio.csv",row.names = F)
 
 #Agrego la poblacion a las defunciones
 
 names(all)
 names(poblacion)
 
-defunciones_argentina_2021 <-  all %>%
-  left_join(pob, by= c("IDPROV"="codigo",
-                             "EDAD",
+defunciones_argentina_2022 <-  all %>%
+  left_join(pob_vitales %>% filter(anio == 2022), by= c("IDPROV"="codigo",
+                             "EDAD"="EDAD_VITALES",
                              "SEXO"= "sexo"))%>%
     select(-localidad) %>%
   rename("POBLACION"=poblacion)%>%
@@ -132,7 +170,7 @@ defunciones_argentina_2021 <-  all %>%
                 values_fill = 0)
 
 
-defunciones_argentina_2021[is.na(defunciones_argentina_2021)] <- 0
+defunciones_argentina_2022[is.na(defunciones_argentina_2022)] <- 0
 
 #Poblacion estandar
 
@@ -163,9 +201,10 @@ estandar_2010 <- poblacion %>%
 tasas_estandar <- all %>%
   group_by(EDAD,SEXO,CAUSA)%>%
   summarise(DEFUNCIONES= sum(DEFUNCIONES))%>%
-  left_join(pob %>%
-              group_by(sexo,EDAD) %>%
-              summarise(POBLACION= sum(poblacion)), by= c("EDAD",
+  left_join(pob_vitales %>%
+              filter(anio == 2023) %>%
+              group_by(sexo,EDAD_VITALES) %>%
+              summarise(POBLACION= sum(poblacion)), by= c("EDAD"="EDAD_VITALES",
                        "SEXO"= "sexo")) %>%
     mutate(TASA= DEFUNCIONES*100000/POBLACION)%>%
     replace(is.na(.),0) %>%
@@ -188,12 +227,12 @@ openxlsx::addWorksheet(wb,"Estandar 2000")
 openxlsx::addWorksheet(wb,"Tasas Estandar")
 
 
-openxlsx::writeData(wb,"Defunciones",defunciones_argentina_2021 %>% filter(EDAD != "07.TODAS LAS EDADES"))
-openxlsx::writeData(wb,"Defunciones Todas la Edades",defunciones_argentina_2021 %>% filter(EDAD == "07.TODAS LAS EDADES"))
+openxlsx::writeData(wb,"Defunciones",defunciones_argentina_2023 %>% filter(EDAD != "07.TODAS LAS EDADES"))
+openxlsx::writeData(wb,"Defunciones Todas la Edades",defunciones_argentina_2023 %>% filter(EDAD == "07.TODAS LAS EDADES"))
 openxlsx::writeData(wb,"Estandar 2010",estandar_2010)
 openxlsx::writeData(wb,"Estandar 2000",estandar_2000)
 openxlsx::writeData(wb,"Tasas Estandar",tasas_estandar)
 
-openxlsx::saveWorkbook(wb,"defunciones_argentina_2021.xlsx",overwrite = TRUE)
+openxlsx::saveWorkbook(wb,"defunciones_argentina_2023.xlsx",overwrite = TRUE)
 
 
